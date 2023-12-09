@@ -12,15 +12,16 @@ import { createServer } from "node:http";
 import { type AddressInfo } from "node:net";
 import { io as ioc, type Socket as ClientSocket } from "socket.io-client";
 import { Server, Socket, type Socket as ServerSocket } from "socket.io";
+import http from "http";
 
 import { GameHandler, GameState } from "../GameHandlers";
 
 function waitFor(socket: ServerSocket | ClientSocket | null, event: string) {
 	return new Promise((resolve, reject) => {
 		if (!socket) {
-			reject("Socket is null");
+			return reject("Socket is null");
 		}
-		socket?.once(event, resolve);
+		socket.once(event, resolve);
 	});
 }
 
@@ -28,7 +29,7 @@ interface TestGameDetails {
 	gameId: string;
 	iteration: number;
 	state: GameState;
-  hostToken: string;
+	hostToken: string;
 }
 
 interface TestGameAccessDetails {
@@ -51,13 +52,12 @@ const sampleTestGameDetails: TestGameDetails = {
 	gameId: "testGame",
 	iteration: 1,
 	state: "waitingForPlayers",
-  hostToken: sampleTestToken,
+	hostToken: sampleTestToken,
 };
 
 const sampleTestPlayerDetails: TestPlayerDetails = {
 	playerId: "testPlayer",
 };
-
 
 const sampleTestGameAccessDetails: TestGameAccessDetails = {
 	gameId: "testGame",
@@ -78,7 +78,8 @@ describe("Game functions", () => {
 			TestGameEvent,
 			string,
 			TestGameAccessDetails
-		>;
+		>,
+    port: number;
 
 	beforeAll(() => {
 		return new Promise((resolve) => {
@@ -89,7 +90,7 @@ describe("Game functions", () => {
 			gameHandler = new GameHandler(httpServer, tokenValidator);
 
 			httpServer.listen(() => {
-				const port = (httpServer.address() as AddressInfo).port;
+				port = (httpServer.address() as AddressInfo).port;
 				clientSocket = ioc(`http://localhost:${port}`);
 				clientSocket.on("connect", resolve);
 			});
@@ -266,380 +267,531 @@ describe("Game functions", () => {
 			});
 		});
 
-    it("should throw an error if the player has no id", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onCreateGame(mocked);
+		it("should throw an error if the player has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onCreateGame(mocked);
 
-        const serverSocket = gameHandler._mostRecentSocket;
+				const serverSocket = gameHandler._mostRecentSocket;
 
-        waitFor(serverSocket, "game:create").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then((value) => {
-            expect(value).toEqual("Player must have an id");
-            resolve();
-          });
-        });
+				waitFor(serverSocket, "game:create").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Player must have an id");
+						resolve();
+					});
+				});
 
-        clientSocket.emit(
-          "game:create",
-          sampleTestGameDetails,
-          { ...sampleTestPlayerDetails, playerId: undefined },
-          sampleTestToken
-        );
-      });
-    });
+				clientSocket.emit(
+					"game:create",
+					sampleTestGameDetails,
+					{ ...sampleTestPlayerDetails, playerId: undefined },
+					sampleTestToken
+				);
+			});
+		});
+
+		it("shouldn't be able to create a game with an existing id", async () => {
+			gameHandler.onCreateGame(mocked);
+			const randomId = Math.random().toString(36).substring(7);
+
+			const waitForFirstCreateGamePromise = waitFor(
+				serverSocket,
+				"game:create"
+			);
+      const waitForGameCreated = waitFor(clientSocket, "game:created");
+			clientSocket.emit(
+				"game:create",
+				{ ...sampleTestGameDetails, gameId: randomId },
+				sampleTestPlayerDetails,
+				sampleTestToken
+			);
+			await waitForFirstCreateGamePromise;
+      await waitForGameCreated;
+
+			const waitForSecondCreateGamePromise = waitFor(
+				serverSocket,
+				"game:create"
+			);
+      const waitForError = waitFor(clientSocket, "error");
+			clientSocket.emit(
+				"game:create",
+				{ ...sampleTestGameDetails, gameId: randomId },
+				sampleTestPlayerDetails,
+				sampleTestToken
+			);
+
+			await waitForSecondCreateGamePromise;
+
+      expect(mocked).toHaveBeenCalledTimes(1);
+      expect(waitForError).resolves.toEqual(`Game with id ${randomId} already exists`);
+		});
+	});
+
+	describe("Join game", () => {
+		const joinGameFn = async (
+			gameAccess: TestGameAccessDetails,
+			player: TestPlayerDetails
+		) => {};
+		let mocked = vi.fn().mockImplementation(joinGameFn);
+
+		beforeEach(() => {
+			mocked.mockReset();
+		});
+
+		it("should be able to join a game", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onJoinGame(mocked);
+
+				waitFor(serverSocket, "game:join").then(() => {
+					expect(mocked).toHaveBeenCalled();
+					expect(mocked).toHaveBeenCalledWith(
+						sampleTestGameAccessDetails,
+						sampleTestPlayerDetails
+					);
+					waitFor(clientSocket, "game:joined").then(() => {
+						resolve();
+					});
+				});
+
+				clientSocket.emit(
+					"game:join",
+					sampleTestGameAccessDetails,
+					sampleTestPlayerDetails
+				);
+			});
+		});
+
+		it("shouldn't be able to join a game with an invalid token", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onJoinGame(mocked);
+				gameHandler.setValidateToken(
+					async (token: string) => token === "secretpassword"
+				);
+
+				const testToken: string = "testToken";
+				const serverSocket = gameHandler._mostRecentSocket;
+
+				waitFor(serverSocket, "game:join").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then(() => {
+						resolve();
+					});
+				});
+
+				clientSocket.emit(
+					"game:join",
+					sampleTestGameAccessDetails,
+					sampleTestPlayerDetails,
+					testToken
+				);
+			});
+		});
+
+		it("should throw an error if the game has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onJoinGame(mocked);
+
+				const serverSocket = gameHandler._mostRecentSocket;
+
+				waitFor(serverSocket, "game:join").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Game must have an id");
+						resolve();
+					});
+				});
+
+				clientSocket.emit(
+					"game:join",
+					{ ...sampleTestGameAccessDetails, gameId: undefined },
+					sampleTestPlayerDetails,
+					sampleTestToken
+				);
+			});
+		});
+
+		it("should throw an error if the player has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onJoinGame(mocked);
+
+				const serverSocket = gameHandler._mostRecentSocket;
+
+				waitFor(serverSocket, "game:join").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Player must have an id");
+						resolve();
+					});
+				});
+
+				clientSocket.emit(
+					"game:join",
+					sampleTestGameAccessDetails,
+					{ ...sampleTestPlayerDetails, playerId: undefined },
+					sampleTestToken
+				);
+			});
+		});
 
 	});
 
-  describe("Join game", () => {
-    const joinGameFn = async (
-      gameAccess: TestGameAccessDetails,
-      player: TestPlayerDetails
-    ) => {};
-    let mocked = vi.fn().mockImplementation(joinGameFn);
+	describe("Start game", () => {
+		const startGameFn = async (gameAccess: TestGameAccessDetails) => {};
+		let mocked = vi.fn().mockImplementation(startGameFn);
 
-    beforeEach(() => {
-      mocked.mockReset();
-    });
+		beforeEach(() => {
+			mocked.mockReset();
+		});
 
-    it("should be able to join a game", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onJoinGame(mocked);
+		it("should be able to start a game", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onStartGame(mocked);
 
-        waitFor(serverSocket, "game:join").then(() => {
-          expect(mocked).toHaveBeenCalled();
-          expect(mocked).toHaveBeenCalledWith(
-            sampleTestGameAccessDetails,
-            sampleTestPlayerDetails
-          );
-          waitFor(clientSocket, "game:joined").then(() => {
-            resolve();
-          });
-        });
+				waitFor(serverSocket, "game:start").then(() => {
+					expect(mocked).toHaveBeenCalled();
+					expect(mocked).toHaveBeenCalledWith(sampleTestGameAccessDetails);
+					waitFor(clientSocket, "game:started").then(() => {
+						resolve();
+					});
+				});
 
-        clientSocket.emit(
-          "game:join",
-          sampleTestGameAccessDetails,
-          sampleTestPlayerDetails
-        );
-      });
-    });
+				clientSocket.emit("game:start", sampleTestGameAccessDetails);
+			});
+		});
 
-    it("shouldn't be able to join a game with an invalid token", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onJoinGame(mocked);
-        gameHandler.setValidateToken(
-          async (token: string) => token === "secretpassword"
-        );
+		it("shouldn't be able to start a game with an invalid token", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onStartGame(mocked);
+				gameHandler.setValidateToken(
+					async (token: string) => token === "secretpassword"
+				);
 
-        const testToken: string = "testToken";
-        const serverSocket = gameHandler._mostRecentSocket;
+				const testToken: string = "testToken";
+				const serverSocket = gameHandler._mostRecentSocket;
 
-        waitFor(serverSocket, "game:join").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then(() => {
-            resolve();
-          });
-        });
+				waitFor(serverSocket, "game:start").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then(() => {
+						resolve();
+					});
+				});
 
-        clientSocket.emit(
-          "game:join",
-          sampleTestGameAccessDetails,
-          sampleTestPlayerDetails,
-          testToken
-        );
-      });
-    });
+				clientSocket.emit("game:start", sampleTestGameAccessDetails, testToken);
+			});
+		});
 
-    it("should throw an error if the game has no id", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onJoinGame(mocked);
+		it("should throw an error if the game has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onStartGame(mocked);
 
-        const serverSocket = gameHandler._mostRecentSocket;
+				const serverSocket = gameHandler._mostRecentSocket;
 
-        waitFor(serverSocket, "game:join").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then((value) => {
-            expect(value).toEqual("Game must have an id");
-            resolve();
-          });
-        });
+				waitFor(serverSocket, "game:start").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Game must have an id");
+						resolve();
+					});
+				});
 
-        clientSocket.emit(
-          "game:join",
-          { ...sampleTestGameAccessDetails, gameId: undefined },
-          sampleTestPlayerDetails,
-          sampleTestToken
-        );
-      });
-    });
+				clientSocket.emit(
+					"game:start",
+					{ ...sampleTestGameAccessDetails, gameId: undefined },
+					sampleTestToken
+				);
+			});
+		});
+	});
 
-    it("should throw an error if the player has no id", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onJoinGame(mocked);
+	describe("Finish game", () => {
+		const finishGameFn = async (gameAccess: TestGameAccessDetails) => {};
+		let mocked = vi.fn().mockImplementation(finishGameFn);
 
-        const serverSocket = gameHandler._mostRecentSocket;
+		beforeEach(() => {
+			mocked.mockReset();
+		});
 
-        waitFor(serverSocket, "game:join").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then((value) => {
-            expect(value).toEqual("Player must have an id");
-            resolve();
-          });
-        });
+		it("should be able to finish a game", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onFinishGame(mocked);
 
-        clientSocket.emit(
-          "game:join",
-          sampleTestGameAccessDetails,
-          { ...sampleTestPlayerDetails, playerId: undefined },
-          sampleTestToken
-        );
-      });
-    });
+				waitFor(serverSocket, "game:finish").then(() => {
+					expect(mocked).toHaveBeenCalled();
+					expect(mocked).toHaveBeenCalledWith(sampleTestGameAccessDetails);
+					waitFor(clientSocket, "game:finished").then(() => {
+						resolve();
+					});
+				});
 
-  });
+				clientSocket.emit("game:finish", sampleTestGameAccessDetails);
+			});
+		});
 
-  describe("Start game", () => {
-    const startGameFn = async (
-      gameAccess: TestGameAccessDetails
-    ) => {};
-    let mocked = vi.fn().mockImplementation(startGameFn);
+		it("shouldn't be able to finish a game with an invalid token", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onFinishGame(mocked);
+				gameHandler.setValidateToken(
+					async (token: string) => token === "secretpassword"
+				);
 
-    beforeEach(() => {
-      mocked.mockReset();
-    });
+				const testToken: string = "testToken";
+				const serverSocket = gameHandler._mostRecentSocket;
 
-    it("should be able to start a game", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onStartGame(mocked);
+				waitFor(serverSocket, "game:finish").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then(() => {
+						resolve();
+					});
+				});
 
-        waitFor(serverSocket, "game:start").then(() => {
-          expect(mocked).toHaveBeenCalled();
-          expect(mocked).toHaveBeenCalledWith(
-            sampleTestGameAccessDetails
-          );
-          waitFor(clientSocket, "game:started").then(() => {
-            resolve();
-          });
-        });
+				clientSocket.emit(
+					"game:finish",
+					sampleTestGameAccessDetails,
+					testToken
+				);
+			});
+		});
 
-        clientSocket.emit(
-          "game:start",
-          sampleTestGameAccessDetails
-        );
-      });
-    });
+		it("should throw an error if the game has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onFinishGame(mocked);
 
-    it("shouldn't be able to start a game with an invalid token", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onStartGame(mocked);
-        gameHandler.setValidateToken(
-          async (token: string) => token === "secretpassword"
-        );
+				waitFor(serverSocket, "game:finish").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Game must have an id");
+						resolve();
+					});
+				});
 
-        const testToken: string = "testToken";
-        const serverSocket = gameHandler._mostRecentSocket;
+				clientSocket.emit(
+					"game:finish",
+					{ ...sampleTestGameAccessDetails, gameId: undefined },
+					sampleTestToken
+				);
+			});
+		});
+	});
 
-        waitFor(serverSocket, "game:start").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then(() => {
-            resolve();
-          });
-        });
+	describe("Emit game event", () => {
+		const emitGameEventFn = async (gameEvent: TestGameEvent) => {};
+		let mocked = vi.fn().mockImplementation(emitGameEventFn);
 
-        clientSocket.emit(
-          "game:start",
-          sampleTestGameAccessDetails,
-          testToken
-        );
-      });
-    });
+		beforeEach(() => {
+			mocked.mockReset();
+		});
 
-    it("should throw an error if the game has no id", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onStartGame(mocked);
+		it("should be able to emit a game event", async () => {
+			gameHandler.onEmitGameEvent(mocked);
 
-        const serverSocket = gameHandler._mostRecentSocket;
+			const waitForServerpromise = waitFor(serverSocket, "game:event");
+			const waitForClientPromise = waitFor(clientSocket, "game:event");
 
-        waitFor(serverSocket, "game:start").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then((value) => {
-            expect(value).toEqual("Game must have an id");
-            resolve();
-          });
-        });
+			clientSocket.emit(
+				"game:event",
+				sampleTestGameAccessDetails,
+				sampleTestGameEvent,
+				sampleTestPlayerDetails
+			);
 
-        clientSocket.emit(
-          "game:start",
-          { ...sampleTestGameAccessDetails, gameId: undefined },
-          sampleTestToken
-        );
-      });
-    });
+			await waitForServerpromise;
+			expect(mocked).toHaveBeenCalledWith(
+				sampleTestGameEvent,
+				sampleTestPlayerDetails
+			);
+			expect(waitForClientPromise).resolves;
+		});
 
-  });
+		it("shouldn't be able to emit a game event without player details", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onEmitGameEvent(mocked);
 
-  describe("Finish game", () => {
-    const finishGameFn = async (
-      gameAccess: TestGameAccessDetails
-    ) => {};
-    let mocked = vi.fn().mockImplementation(finishGameFn);
+				const serverSocket = gameHandler._mostRecentSocket;
 
-    beforeEach(() => {
-      mocked.mockReset();
-    });
+				waitFor(serverSocket, "game:event").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Player must have an id");
+						resolve();
+					});
+				});
 
-    it("should be able to finish a game", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onFinishGame(mocked);
+				clientSocket.emit(
+					"game:event",
+					sampleTestGameAccessDetails,
+					sampleTestGameEvent
+				);
+			});
+		});
 
-        waitFor(serverSocket, "game:finish").then(() => {
-          expect(mocked).toHaveBeenCalled();
-          expect(mocked).toHaveBeenCalledWith(
-            sampleTestGameAccessDetails
-          );
-          waitFor(clientSocket, "game:finished").then(() => {
-            resolve();
-          });
-        });
+		it("shouldn't be able to emit a game event with an invalid token", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onEmitGameEvent(mocked);
+				gameHandler.setValidateToken(
+					async (token: string) => token === "secretpassword"
+				);
 
-        clientSocket.emit(
-          "game:finish",
-          sampleTestGameAccessDetails
-        );
-      });
-    });
+				const testToken: string = "testToken";
+				const serverSocket = gameHandler._mostRecentSocket;
 
-    it("shouldn't be able to finish a game with an invalid token", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onFinishGame(mocked);
-        gameHandler.setValidateToken(
-          async (token: string) => token === "secretpassword"
-        );
+				waitFor(serverSocket, "game:event").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then(() => {
+						resolve();
+					});
+				});
 
-        const testToken: string = "testToken";
-        const serverSocket = gameHandler._mostRecentSocket;
+				clientSocket.emit(
+					"game:event",
+					sampleTestGameAccessDetails,
+					sampleTestGameEvent
+				);
+			});
+		});
 
-        waitFor(serverSocket, "game:finish").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then(() => {
-            resolve();
-          });
-        });
+		it("should throw an error if the game has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onEmitGameEvent(mocked);
 
-        clientSocket.emit(
-          "game:finish",
-          sampleTestGameAccessDetails,
-          testToken
-        );
-      });
-    });
+				const serverSocket = gameHandler._mostRecentSocket;
 
-    it("should throw an error if the game has no id", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onFinishGame(mocked);
+				waitFor(serverSocket, "game:event").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Game must have an id");
+						resolve();
+					});
+				});
 
-        const serverSocket = gameHandler._mostRecentSocket;
+				clientSocket.emit(
+					"game:event",
+					{ ...sampleTestGameAccessDetails, gameId: undefined },
+					sampleTestGameEvent
+				);
+			});
+		});
 
-        waitFor(serverSocket, "game:finish").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then((value) => {
-            expect(value).toEqual("Game must have an id");
-            resolve();
-          });
-        });
+		describe("From server side", () => {
+			it("should be able to emit a game event", async () => {
+				const waitForClientPromise = waitFor(clientSocket, "game:event");
+				gameHandler.emitEvent(sampleTestGameEvent);
+				await waitForClientPromise;
+				expect(waitForClientPromise).resolves;
+			});
 
-        clientSocket.emit(
-          "game:finish",
-          { ...sampleTestGameAccessDetails, gameId: undefined },
-          sampleTestToken
-        );
-      });
-    });
+			it("shouldn't be able to emit an event without a game id", async () => {
+				gameHandler
+					.emitEvent({
+						...sampleTestGameEvent,
+						gameId: undefined,
+					} as any)
+					.catch((error) => {
+						expect(error).toEqual(new Error("Game event must have a game id"));
+					});
+				expect.assertions(1);
+			});
+		});
+	});
 
-  });
+	describe("Leave game", () => {
+		const leaveGameFn = async (gameAccess: TestGameAccessDetails) => {};
+		let mocked = vi.fn().mockImplementation(leaveGameFn);
 
+		beforeEach(() => {
+			mocked.mockReset();
+		});
 
-  describe("Emit game event", () => {
-    const emitGameEventFn = async (
-      gameEvent: TestGameEvent
-    ) => {};
-    let mocked = vi.fn().mockImplementation(emitGameEventFn);
+		it("should be able to leave a game", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onLeaveGame(mocked);
 
-    beforeEach(() => {
-      mocked.mockReset();
-    });
+				waitFor(serverSocket, "game:leave").then(() => {
+					expect(mocked).toHaveBeenCalled();
+					expect(mocked).toHaveBeenCalledWith(
+						sampleTestGameAccessDetails,
+						sampleTestPlayerDetails
+					);
+					waitFor(clientSocket, "game:left").then(() => {
+						resolve();
+					});
+				});
 
-    it("should be able to emit a game event", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onEmitGameEvent(mocked);
+				clientSocket.emit(
+					"game:leave",
+					sampleTestGameAccessDetails,
+					sampleTestPlayerDetails
+				);
+			});
+		});
 
-        waitFor(serverSocket, "game:event").then(() => {
-          expect(mocked).toHaveBeenCalled();
-          expect(mocked).toHaveBeenCalledWith(
-            sampleTestGameEvent
-          );
-          waitFor(clientSocket, "game:event").then(() => {
-            resolve();
-          });
-        });
+		it("shouldn't be able to leave a game with an invalid token", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onLeaveGame(mocked);
+				gameHandler.setValidateToken(
+					async (token: string) => token === "secretpassword"
+				);
 
-        clientSocket.emit(
-          "game:event",
-          sampleTestGameEvent
-        );
-      });
-    });
+				const testToken: string = "testToken";
+				const serverSocket = gameHandler._mostRecentSocket;
 
-    it("shouldn't be able to emit a game event with an invalid token", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onEmitGameEvent(mocked);
-        gameHandler.setValidateToken(
-          async (token: string) => token === "secretpassword"
-        );
+				waitFor(serverSocket, "game:leave").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then(() => {
+						resolve();
+					});
+				});
 
-        const testToken: string = "testToken";
-        const serverSocket = gameHandler._mostRecentSocket;
+				clientSocket.emit(
+					"game:leave",
+					{ ...sampleTestGameAccessDetails, token: testToken },
+					sampleTestPlayerDetails
+				);
+			});
+		});
 
-        waitFor(serverSocket, "game:event").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then(() => {
-            resolve();
-          });
-        });
+		it("should throw an error if the game has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onLeaveGame(mocked);
 
-        clientSocket.emit(
-          "game:event",
-          sampleTestGameEvent,
-          testToken
-        );
-      });
-    });
+				const serverSocket = gameHandler._mostRecentSocket;
 
-    it("should throw an error if the game has no id", () => {
-      return new Promise<void>((resolve) => {
-        gameHandler.onEmitGameEvent(mocked);
+				waitFor(serverSocket, "game:leave").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Game must have an id");
+						resolve();
+					});
+				});
 
-        const serverSocket = gameHandler._mostRecentSocket;
+				clientSocket.emit(
+					"game:leave",
+					{ ...sampleTestGameAccessDetails, gameId: undefined },
+					sampleTestPlayerDetails
+				);
+			});
+		});
 
-        waitFor(serverSocket, "game:event").then(() => {
-          expect(mocked).not.toHaveBeenCalled();
-          waitFor(clientSocket, "error").then((value) => {
-            expect(value).toEqual("Game must have an id");
-            resolve();
-          });
-        });
+		it("should throw an error if the player has no id", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onLeaveGame(mocked);
 
-        clientSocket.emit(
-          "game:event",
-          { ...sampleTestGameEvent, gameId: undefined },
-          sampleTestToken
-        );
-      });
-    });
+				const serverSocket = gameHandler._mostRecentSocket;
 
-  });
+				waitFor(serverSocket, "game:leave").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Player must have an id");
+						resolve();
+					});
+				});
 
+				clientSocket.emit("game:leave", sampleTestGameAccessDetails, {
+					...sampleTestPlayerDetails,
+					playerId: undefined,
+				});
+			});
+		});
+	});
 
 	/* it("should work with an acknowledgement", () => {
 		return new Promise<void>((resolve) => {

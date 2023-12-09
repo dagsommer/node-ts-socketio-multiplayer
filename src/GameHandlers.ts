@@ -20,10 +20,11 @@ interface MinimumPlayerDetails {
 }
 
 interface MinimumGameEvent {
+    gameId: string;
 	iteration: number;
 }
 
-enum GameAction {
+export enum GameAction {
 	Create,
 	Join,
 	Start,
@@ -31,65 +32,6 @@ enum GameAction {
 	EmitEvent,
 	Finish,
 	Leave,
-}
-
-//it should take a generic type which is the game details.
-// the generic must have an id, and a function to validate a token.
-//it should take a generic type which is the user details.
-//it should create handlers for socket.io events.
-//  for game:create it should call a method it is given in the constructor.
-//   then it should emit a game:created event to the room, which is the game id, and add the user to the socket.io room, which is the game id.
-//  for game:join it should call a method it is given in the constructor.
-//   then it should
-//   1) add the user to the socket.io room, which is the game id.
-//   2) emit a game:joined event to the room, which is the game id.
-//  for game:start it should call a method it is given in the constructor.
-//   then it should emit a game:started event to the room, which is the game id.
-//  for game:event it should call a method it is given in the constructor.
-//   then it should emit a game:event event to the room, which is the game id.
-//  for game:finish it should call a method it is given in the constructor.
-//   then it should emit a game:finished event to the room, which is the game id.
-//   and it should remove the room from the socket.io room, which is the game id.
-//  for game:leave it should call a method it is given in the constructor.
-//   then it should emit a game:left event to the room, which is the game id.
-//   and it should remove the user from the socket.io room, which is the game id.
-
-// write a constructor that takes the following arguments:
-// 1) a socket.io server
-// 2) a function that creates a game
-// 3) a function that joins a game
-// 4) a function that starts a game
-// 5) a function that emits a game event
-// 6) a function that finishes a game
-// 7) a function that leaves a game
-// 8) a function that validates a token
-// 9) a function that gets the game state
-// 10) a function that sets the game state
-
-interface GameHandlerInterface<
-	GameDetailsType extends MinimumGameDetails,
-	PlayerType extends MinimumPlayerDetails,
-	GameEvent extends MinimumGameEvent,
-	TokenType,
-	GameAccessDetailsType extends MinimumGameAccessDetails<TokenType>
-> {
-	httpServer: http.Server;
-	createGame: (
-		game: GameDetailsType,
-		player: PlayerType,
-		token: TokenType
-	) => Promise<void>;
-	joinGame: (
-		gameAccess: GameAccessDetailsType,
-		player: PlayerType
-	) => Promise<void>;
-	startGame: (gameAccess: GameAccessDetailsType) => Promise<void>;
-	emitGameEvent: (gameEvent: GameEvent) => Promise<void>;
-	finishGame: (gameAccess: GameAccessDetailsType) => Promise<void>;
-	leaveGame: (gameAccess: GameAccessDetailsType) => Promise<void>;
-	validateToken: (token: TokenType, action: GameAction) => Promise<boolean>;
-	getGameState: (gameId: string) => Promise<GameDetailsType>;
-	setGameState: (state: GameDetailsType) => Promise<void>;
 }
 
 type EventHandler = (...args: any) => Promise<void>;
@@ -205,6 +147,12 @@ export class GameHandler<
 				if (!playerDetails.playerId) {
 					throw new Error("Player must have an id");
 				}
+
+                const room = this.#io.sockets.adapter.rooms.get(game.gameId);
+                if (room && room.size >= 1) {
+                    throw new Error(`Game with id ${game.gameId} already exists`);
+                }
+
 				await handler(game, player, token);
 				socket.join(game.gameId);
 				socket.emit("game:created", game);
@@ -275,7 +223,7 @@ export class GameHandler<
 
 				await handler(gameAccess);
 				socket.emit("game:started", gameAccess);
-				this.#io.to(gameAccess.gameId).emit("game:started", gameAccess);
+				this.#io.to(gameAccess.gameId).emit("game:started", gameAccess.gameId);
 			} else {
 				throw new Error("Invalid token");
 			}
@@ -304,7 +252,7 @@ export class GameHandler<
 
                 await handler(gameAccess);
                 socket.emit("game:finished", gameAccess);
-                this.#io.to(gameAccess.gameId).emit("game:finished", gameAccess);
+                this.#io.to(gameAccess.gameId).emit("game:finished", gameAccess.gameId);
             } else {
                 throw new Error("Invalid token");
             }
@@ -312,12 +260,13 @@ export class GameHandler<
     }
 
     public onEmitGameEvent = (
-        handler: (gameEvent: GameEvent) => Promise<void>
+        handler: (gameEvent: GameEvent, player: PlayerType) => Promise<void>
     ) => {
         this.on("game:event", async (socket, ...args) => {
-            const [gameAccessDetails, gameEventObj] = args;
+            const [gameAccessDetails, gameEventObj, playerObj] = args;
             const gameEvent = gameEventObj as GameEvent;
             const gameAccess = gameAccessDetails as GameAccessDetailsType;
+            const player = playerObj as PlayerType;
 
             const isValid = await this.#validateToken(
                 gameAccess.token,
@@ -333,12 +282,57 @@ export class GameHandler<
                     throw new Error("Game must have a token");
                 }
 
-                await handler(gameEvent);
-                socket.emit("game:event", gameEvent);
+                if (!gameEvent.iteration) {
+                    throw new Error("Game event must have an iteration");
+                }
+
+                if (!player?.playerId) {
+                    throw new Error("Player must have an id");
+                }
+
+                await handler(gameEvent, player);
                 this.#io.to(gameAccess.gameId).emit("game:event", gameEvent);
             } else {
                 throw new Error("Invalid token");
             }
         });
+    }
+
+    public onLeaveGame = (
+        handler: (gameAccess: GameAccessDetailsType, player: PlayerType) => Promise<void>
+    ) => {
+        this.on("game:leave", async (socket, ...args) => {
+            const [gameAccessDetails, playerDetails] = args;
+            const gameAccess = gameAccessDetails as GameAccessDetailsType;
+            const player = playerDetails as PlayerType;
+            const isValid = await this.#validateToken(
+                gameAccess.token,
+                gameAccess.gameId,
+                GameAction.Leave
+            );
+            if (isValid) {
+
+                if (!gameAccess.gameId) {
+                    throw new Error("Game must have an id");
+                }
+                if (!player.playerId) {
+                    throw new Error("Player must have an id");
+                }
+                await handler(gameAccess, player);
+                socket.emit("game:left", gameAccess);
+            } else {
+                throw new Error("Invalid token");
+            }
+        });
+    }
+
+    public emitEvent = async (gameEvent: GameEvent) => {
+        const { gameId } = gameEvent;
+
+        if (!gameId) {
+            throw new Error("Game event must have a game id");
+        }
+
+        this.#io.to(gameId).emit("game:event", gameEvent);
     }
 }
