@@ -14,60 +14,10 @@ import { io as ioc, type Socket as ClientSocket } from "socket.io-client";
 import { Server, Socket, type Socket as ServerSocket } from "socket.io";
 import http from "http";
 
-import { GameHandler, GameState } from "../GameHandlers";
-
-function waitFor(socket: ServerSocket | ClientSocket | null, event: string) {
-	return new Promise((resolve, reject) => {
-		if (!socket) {
-			return reject("Socket is null");
-		}
-		socket.once(event, resolve);
-	});
-}
-
-interface TestGameDetails {
-	gameId: string;
-	iteration: number;
-	state: GameState;
-	hostToken: string;
-}
-
-interface TestGameAccessDetails {
-	gameId: string;
-	token: string;
-}
-
-interface TestPlayerDetails {
-	playerId: string;
-}
-
-interface TestGameEvent {
-	gameId: string;
-	iteration: number;
-}
-
-const sampleTestToken: string = "testToken";
-
-const sampleTestGameDetails: TestGameDetails = {
-	gameId: "testGame",
-	iteration: 1,
-	state: "waitingForPlayers",
-	hostToken: sampleTestToken,
-};
-
-const sampleTestPlayerDetails: TestPlayerDetails = {
-	playerId: "testPlayer",
-};
-
-const sampleTestGameAccessDetails: TestGameAccessDetails = {
-	gameId: "testGame",
-	token: sampleTestToken,
-};
-
-const sampleTestGameEvent: TestGameEvent = {
-	gameId: "testGame",
-	iteration: 1,
-};
+import { GameHandler } from "../GameHandler";
+import { TestGameAccessDetails, TestGameDetails, TestGameEvent, TestPlayerDetails, sampleTestGameAccessDetails, sampleTestGameDetails, sampleTestGameEvent, sampleTestPlayerDetails, sampleTestToken } from "../../__tests__/TestData";
+import { GameState } from "../../types";
+import { waitFor} from "../../__tests__/util";
 
 describe("Game functions", () => {
 	let serverSocket: Socket | null = null,
@@ -79,7 +29,7 @@ describe("Game functions", () => {
 			string,
 			TestGameAccessDetails
 		>,
-    port: number;
+		port: number;
 
 	beforeAll(() => {
 		return new Promise((resolve) => {
@@ -298,7 +248,7 @@ describe("Game functions", () => {
 				serverSocket,
 				"game:create"
 			);
-      const waitForGameCreated = waitFor(clientSocket, "game:created");
+			const waitForGameCreated = waitFor(clientSocket, "game:created");
 			clientSocket.emit(
 				"game:create",
 				{ ...sampleTestGameDetails, gameId: randomId },
@@ -306,13 +256,13 @@ describe("Game functions", () => {
 				sampleTestToken
 			);
 			await waitForFirstCreateGamePromise;
-      await waitForGameCreated;
+			await waitForGameCreated;
 
 			const waitForSecondCreateGamePromise = waitFor(
 				serverSocket,
 				"game:create"
 			);
-      const waitForError = waitFor(clientSocket, "error");
+			const waitForError = waitFor(clientSocket, "error");
 			clientSocket.emit(
 				"game:create",
 				{ ...sampleTestGameDetails, gameId: randomId },
@@ -322,8 +272,10 @@ describe("Game functions", () => {
 
 			await waitForSecondCreateGamePromise;
 
-      expect(mocked).toHaveBeenCalledTimes(1);
-      expect(waitForError).resolves.toEqual(`Game with id ${randomId} already exists`);
+			expect(mocked).toHaveBeenCalledTimes(1);
+			expect(waitForError).resolves.toEqual(
+				`Game with id ${randomId} already exists`
+			);
 		});
 	});
 
@@ -432,7 +384,6 @@ describe("Game functions", () => {
 				);
 			});
 		});
-
 	});
 
 	describe("Start game", () => {
@@ -691,6 +642,28 @@ describe("Game functions", () => {
 				expect.assertions(1);
 			});
 		});
+
+		it("shouldn't be able to emit an event without an iteration", () => {
+			return new Promise<void>((resolve) => {
+				gameHandler.onEmitGameEvent(mocked);
+
+				const serverSocket = gameHandler._mostRecentSocket;
+
+				waitFor(serverSocket, "game:event").then(() => {
+					expect(mocked).not.toHaveBeenCalled();
+					waitFor(clientSocket, "error").then((value) => {
+						expect(value).toEqual("Game event must have an iteration");
+						resolve();
+					});
+				});
+
+				clientSocket.emit(
+					"game:event",
+					{ ...sampleTestGameEvent, iteration: undefined },
+					sampleTestPlayerDetails
+				);
+			});
+		});
 	});
 
 	describe("Leave game", () => {
@@ -790,6 +763,44 @@ describe("Game functions", () => {
 					playerId: undefined,
 				});
 			});
+		});
+	});
+
+	it("should emit an error if the socket emits an unknown event", () => {
+		return new Promise<void>((resolve) => {
+			const serverSocket = gameHandler._mostRecentSocket;
+
+			waitFor(serverSocket, "unknown:event").then(() => {
+				waitFor(clientSocket, "error").then((value) => {
+					expect(value).toEqual("Invalid event");
+					resolve();
+				});
+			});
+
+			clientSocket.emit("unknown:event");
+		});
+	});
+
+	it("should emit an error if the handler throws an error", () => {
+		return new Promise<void>((resolve) => {
+			const serverSocket = gameHandler._mostRecentSocket;
+
+			waitFor(serverSocket, "game:create").then(() => {
+				waitFor(clientSocket, "error").then((value) => {
+					expect(value).toEqual("Error while handling event");
+					resolve();
+				});
+			});
+
+			gameHandler.onCreateGame(() => {
+				throw new Error("Test error");
+			});
+			clientSocket.emit(
+				"game:create",
+				{...sampleTestGameDetails, gameId: "handlerError"},
+				sampleTestPlayerDetails,
+				sampleTestToken
+			);
 		});
 	});
 

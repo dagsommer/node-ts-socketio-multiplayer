@@ -1,5 +1,6 @@
 import http from "http";
-import { GameState, GameHandler, GameAction } from "./GameHandlers";
+import { GameHandler} from "./backend/GameHandler";
+import { GameAction } from "./types";
 
 const server = http.createServer();
 const port = process.env.PORT || 8000;

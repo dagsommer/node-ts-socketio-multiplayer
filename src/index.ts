@@ -1,3 +1,2 @@
-import * as GameHandlers from "./GameHandlers";
-
-export default GameHandlers;
+export {GameHandler} from "./backend/GameHandler";
+export {GameAction, GameState} from "./types";
