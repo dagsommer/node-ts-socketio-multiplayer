@@ -664,6 +664,40 @@ describe("Game functions", () => {
 				);
 			});
 		});
+
+		it("should be able to emit an event with iteration 0", async () => {
+			const waitForServerPromise = waitFor(serverSocket, "game:event");
+			const waitForClientPromise = waitFor(clientSocket, "game:event");
+			gameHandler.onEmitGameEvent(mocked);
+
+			clientSocket.emit(
+				"game:event",
+				sampleTestGameAccessDetails,
+				{ ...sampleTestGameEvent, iteration: 0 },
+				sampleTestPlayerDetails
+			);
+
+			await waitForServerPromise;
+			await waitForClientPromise;
+			expect(mocked).toHaveBeenCalledTimes(1);
+		});
+
+		it("should receive the events created from client side to itself once", async () => {
+			const waitForServerPromise = waitFor(serverSocket, "game:event");
+			const waitForClientPromise = waitFor(clientSocket, "game:event");
+			gameHandler.onEmitGameEvent(mocked);
+
+			clientSocket.emit(
+				"game:event",
+				sampleTestGameAccessDetails,
+				sampleTestGameEvent,
+				sampleTestPlayerDetails
+			);
+
+			await waitForServerPromise;
+			await waitForClientPromise;
+			expect(mocked).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	describe("Leave game", () => {

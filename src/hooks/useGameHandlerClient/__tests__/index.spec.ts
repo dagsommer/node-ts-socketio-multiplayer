@@ -570,18 +570,26 @@ describe("useGameHandlerClient tests", () => {
 				);
 			});
 			await waitFor(socket, "game:join");
+			//send back a game:joined event with the game id
+			act(() => {
+				result.current.onGameJoined(vi.fn());
+			})
+			socket.emit("game:joined", sampleTestGameAccessDetails.gameId);
+
+			await act(() => sleep(100));
 
 			const waitForGameEvent = waitForWithMultipleArguments(
 				socket as ServerSocket,
 				"game:event"
 			);
 			act(() => {
-				result.current.emitGameEvent(sampleTestGameEvent);
+				result.current.emitGameEvent(sampleTestGameAccessDetails, sampleTestGameEvent);
 			});
 			const data = (await waitForGameEvent) as any;
-			const [event, player] = data;
+			const [access, event, playerobj] = data;
+			expect(access).toStrictEqual(sampleTestGameAccessDetails);
 			expect(event).toStrictEqual(sampleTestGameEvent);
-			expect(player).toStrictEqual(sampleTestPlayerDetails);
+			expect(playerobj).toStrictEqual(sampleTestPlayerDetails);
 		});
 
 		it("shouldn't be able to emit a game event without a game event", async () => {
@@ -605,7 +613,7 @@ describe("useGameHandlerClient tests", () => {
 			await waitFor(io, "connection");
 
 			expect(() => {
-				result.current.emitGameEvent(sampleTestGameEvent);
+				result.current.emitGameEvent(sampleTestGameAccessDetails, sampleTestGameEvent);
 			}).toThrowError();
 		});
 	});
@@ -793,5 +801,32 @@ describe("useGameHandlerClient tests", () => {
 				"finished"
 			);
 		});
+	});
+
+	describe("Receiving errors", () => {
+		it("should be able to set a handler for error events", async () => {
+			const { result } = renderHook(() => useGameHandlerClient());
+			expect(result.current.onGameError).toBeDefined();
+		});
+
+		it("should receive a error event when a game error occurs", async () => {
+			const { result } = renderHook(() => useGameHandlerClient());
+			act(() => {
+				result.current.connect(serverUrl);
+			});
+			const socket = (await waitFor(io, "connection")) as ServerSocket;
+			const gameErrorHandler = vi.fn();
+			act(() => {
+				result.current.onGameError(gameErrorHandler);
+			});
+
+			socket.emit("error", "test error");
+
+			// Small delay to allow the event to be handled
+			await act(() => sleep(100));
+
+			expect(gameErrorHandler).toHaveBeenCalledWith("test error");
+		});
+
 	});
 });

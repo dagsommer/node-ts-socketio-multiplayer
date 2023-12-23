@@ -27,7 +27,11 @@ export class GameHandler<
 			action: GameAction
 		) => Promise<boolean>
 	) {
-		this.#io = new Server(httpServer);
+		this.#io = new Server(httpServer, {
+			cors: {
+				origin: "*",
+			},
+		});
 		this.#validateToken = validateToken;
 		this.#io.on("connection", (socket) => {
 			this._mostRecentSocket = socket;
@@ -39,10 +43,11 @@ export class GameHandler<
 
 	#handlers: EventHandlers = {};
 	#io: Server;
-	#validateToken: (
+	#validateToken: <PayloadType>(
 		token: TokenType,
 		gameId: string,
-		action: GameAction
+		action: GameAction,
+		payload?: PayloadType
 	) => Promise<boolean>;
 	_mostRecentSocket: Socket | null = null; // This is used for testing purposes only.
 
@@ -132,7 +137,6 @@ export class GameHandler<
 				}
 				socket.join(game.gameId);
 				socket.emit("game:created", game);
-				this.#io.to(game.gameId).emit("game:joined", player);
 			} else {
 				throw new Error("Invalid token");
 			}
@@ -170,7 +174,6 @@ export class GameHandler<
 				}
 				socket.join(gameAccess.gameId);
 				socket.emit("game:joined", gameAccess.gameId);
-				this.#io.to(gameAccess.gameId).emit("game:joined", player);
 			} else {
 				throw new Error("Invalid token");
 			}
@@ -247,14 +250,16 @@ export class GameHandler<
 			const isValid = await this.#validateToken(
 				gameAccess.token,
 				gameAccess.gameId,
-				GameAction.EmitEvent
+				GameAction.EmitEvent,
+				gameEvent
 			);
 			if (isValid) {
 				if (!gameAccess?.gameId) {
 					throw new Error("Game must have an id");
 				}
 
-				if (!gameEvent?.iteration) {
+				//using double equals here because we want to allow iteration to be 0, but not undefined or null
+				if (gameEvent?.iteration == null) {
 					throw new Error("Game event must have an iteration");
 				}
 
@@ -263,11 +268,11 @@ export class GameHandler<
 				}
 
 				try {
+					this.#io.to(gameAccess.gameId).emit("game:event", gameEvent);
 					await handler(gameEvent, player);
 				} catch (error) {
 					throw new Error("Error while handling event");
 				}
-				this.#io.to(gameAccess.gameId).emit("game:event", gameEvent);
 			} else {
 				throw new Error("Invalid token");
 			}
