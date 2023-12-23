@@ -322,4 +322,13 @@ export class GameHandler<
 
 		this.#io.to(gameId).emit("game:event", gameEvent);
 	};
+
+	public startGame = async (gameId: string) => {
+
+		if (!gameId) {
+			throw new Error("Game must have an id");
+		}
+
+		this.#io.to(gameId).emit("game:started", gameId);
+	}
 }

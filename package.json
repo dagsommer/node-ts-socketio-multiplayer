@@ -1,6 +1,6 @@
 {
   "name": "socketio-multiplayer-lib",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A multiplayer library for socket.io, that allows you to create multiplayer games with ease.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

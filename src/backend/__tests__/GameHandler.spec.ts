@@ -452,6 +452,15 @@ describe("Game functions", () => {
 				);
 			});
 		});
+
+		it("should allow backend to start game", async () => {
+			const waitForClientPromise = waitFor(clientSocket, "game:started");
+			gameHandler.onStartGame(mocked);
+			gameHandler.startGame(sampleTestGameAccessDetails.gameId);
+			await waitForClientPromise;
+			expect(waitForClientPromise).resolves;
+			expect(mocked).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("Finish game", () => {
