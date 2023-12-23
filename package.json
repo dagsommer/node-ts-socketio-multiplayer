@@ -5,7 +5,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "test": "vitest",
+    "test-dev": "vitest",
+    "test": "vitest run",
     "coverage": "vitest run --coverage",
     "build": "npx tsc",
     "start": "node dist/index.js",
