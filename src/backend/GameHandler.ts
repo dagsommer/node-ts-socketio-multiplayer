@@ -1,4 +1,4 @@
-import { Server, Socket } from "socket.io";
+import { Namespace, Server, Socket } from "socket.io";
 
 import http from "http";
 
@@ -25,13 +25,25 @@ export class GameHandler<
 			token: TokenType,
 			gameId: string,
 			action: GameAction
-		) => Promise<boolean>
+		) => Promise<boolean>,
+		io?: Server,
+		namespace?: string
 	) {
-		this.#io = new Server(httpServer, {
-			cors: {
-				origin: "*",
-			},
-		});
+		if (io && !namespace) {
+			throw new Error("Must provide a namespace if providing an io instance");
+		}
+		
+		if (io && namespace) {
+			this.#io = io.of(namespace);
+		} else {
+			const server = new Server(httpServer, {
+				cors: {
+					origin: "*",
+				},
+			});
+			this.#io = server.of("/")
+		}
+
 		this.#validateToken = validateToken;
 		this.#io.on("connection", (socket) => {
 			this._mostRecentSocket = socket;
@@ -42,7 +54,7 @@ export class GameHandler<
 	}
 
 	#handlers: EventHandlers = {};
-	#io: Server;
+	#io: Namespace;
 	#validateToken: <PayloadType>(
 		token: TokenType,
 		gameId: string,
@@ -76,8 +88,13 @@ export class GameHandler<
 		this.#handlers[event] = handler;
 	};
 
-	public close = () => {
-		this.#io.close();
+	public close = (closeServer: boolean = false) => {
+		if (closeServer) {
+			this.#io.server.close();
+		}
+
+		this.#io.disconnectSockets(closeServer);
+		this.#io.removeAllListeners();
 	};
 
 	public _resetHandlers = () => {
@@ -125,7 +142,7 @@ export class GameHandler<
 					throw new Error("Player must have an id");
 				}
 
-				const room = this.#io.sockets.adapter.rooms.get(game.gameId);
+				const room = this.#io.adapter.rooms.get(game.gameId);
 				if (room && room.size >= 1) {
 					throw new Error(`Game with id ${game.gameId} already exists`);
 				}
@@ -324,11 +341,10 @@ export class GameHandler<
 	};
 
 	public startGame = async (gameId: string) => {
-
 		if (!gameId) {
 			throw new Error("Game must have an id");
 		}
 
 		this.#io.to(gameId).emit("game:started", gameId);
-	}
+	};
 }

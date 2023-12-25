@@ -59,6 +59,20 @@ describe("Game functions", () => {
 		serverSocket = gameHandler._mostRecentSocket;
 	});
 
+
+	describe("constructor", () => {
+
+		it("should not allow an io instance to be provided without a namespace", () => {
+			const httpServer = createServer();
+			const tokenValidator = async () => {
+				return true;
+			};
+			expect(() => {
+				new GameHandler(httpServer, tokenValidator, new Server(httpServer));
+			}).toThrowError("Must provide a namespace if providing an io instance");
+		});
+	});
+
 	describe("Create game", () => {
 		const createGameFn = async (
 			game: TestGameDetails,
